@@ -1,0 +1,6 @@
+{
+  "name": "CSV Migration Audit Tool",
+  "description": "Professional tool for auditing, profiling, and scanning CSV files for migration health, hidden characters, and structural integrity.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

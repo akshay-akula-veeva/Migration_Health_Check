@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-base: #E4E3E0;
+  --color-bg-alt: #F1F0ED;
+  --color-bg-sidebar: #DCDAD6;
+  --color-text-main: #141414;
+  --color-accent-black: #141414;
+}
+
+@keyframes progress {
+  0% { width: 0; }
+  50% { width: 70%; }
+  100% { width: 100%; }
+}
+
+body {
+  @apply bg-[#E4E3E0] text-[#141414] antialiased;
+}
