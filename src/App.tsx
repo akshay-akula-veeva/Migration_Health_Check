@@ -139,13 +139,31 @@ export default function App() {
 
   const downloadBadRows = () => {
     if (badRows.length === 0) return;
-    const csv = Papa.unparse(badRows);
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `flagged_rows_${new Date().getTime()}.csv`;
-    a.click();
+    
+    // Use headers from report if available, fallback to initial headers state
+    const activeHeaders = report?.file_health.headers && report.file_health.headers.length > 0 
+      ? report.file_health.headers 
+      : headers;
+
+    const exportHeaders = ["Row_ID", ...activeHeaders];
+    const exportData = [exportHeaders, ...badRows];
+    
+    try {
+      const csv = Papa.unparse(exportData);
+      const fileName = `flagged_rows_${file?.name || 'audit'}_${new Date().getTime()}.csv`;
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', fileName);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Export failed:", err);
+      alert("Failed to export rows. This can happen with extremely large files or mismatched data.");
+    }
   };
 
   const totalViolations = useMemo(() => {
@@ -776,21 +794,51 @@ export default function App() {
                               exit={{ opacity: 0, x: -20 }}
                               className="space-y-6"
                             >
-                               <div className="flex items-center justify-between bg-slate-50 p-4 rounded-xl border border-slate-100">
-                                  <div className="flex items-center gap-3">
-                                    <AlertCircle className="w-5 h-5 text-amber-500" />
-                                    <div>
-                                      <p className="text-sm font-semibold">Delimiter Mismatches</p>
-                                      <p className="text-xs text-slate-500">Rows where column count does not match headers ({report.file_health.column_count})</p>
+                               <div className="space-y-4">
+                                 <div className="flex items-center justify-between bg-slate-50 p-4 rounded-xl border border-slate-100">
+                                    <div className="flex items-center gap-3">
+                                      <AlertCircle className="w-5 h-5 text-amber-500" />
+                                      <div>
+                                        <p className="text-sm font-semibold">Delimiter Mismatches</p>
+                                        <p className="text-xs text-slate-500">
+                                          {report.structural_issues.delimiter_mismatches.length} rows found with incorrect column count (Expected: {report.file_health.column_count})
+                                        </p>
+                                      </div>
                                     </div>
-                                  </div>
-                                  <button 
-                                    onClick={downloadBadRows}
-                                    disabled={badRows.length === 0}
-                                    className="text-xs font-bold text-indigo-600 uppercase tracking-widest px-3 py-1 bg-white border border-slate-200 rounded-lg hover:border-indigo-200 transition-all"
-                                  >
-                                    Export Broken Rows
-                                  </button>
+                                    <button 
+                                      onClick={downloadBadRows}
+                                      disabled={badRows.length === 0}
+                                      className="text-xs font-bold text-indigo-600 uppercase tracking-widest px-3 py-1 bg-white border border-slate-200 rounded-lg hover:border-indigo-200 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                                    >
+                                      Export Flagged Rows ({badRows.length})
+                                    </button>
+                                 </div>
+
+                                 {/* Empty Headers */}
+                                 {report.structural_issues.empty_headers.length > 0 && (
+                                   <div className="flex items-center gap-3 bg-red-50 p-4 rounded-xl border border-red-100">
+                                     <AlertCircle className="w-5 h-5 text-red-500" />
+                                     <div>
+                                       <p className="text-sm font-semibold">Empty Headers Detected</p>
+                                       <p className="text-xs text-slate-500">
+                                         {report.structural_issues.empty_headers.length} columns have no header name. Indices: {report.structural_issues.empty_headers.map(idx => parseInt(idx) + 1).join(', ')}
+                                       </p>
+                                     </div>
+                                   </div>
+                                 )}
+
+                                 {/* Unnamed Column Data */}
+                                 {report.structural_issues.unnamed_column_data.length > 0 && (
+                                   <div className="flex items-center gap-3 bg-amber-50 p-4 rounded-xl border border-amber-100">
+                                     <FileWarning className="w-5 h-5 text-amber-500" />
+                                     <div>
+                                       <p className="text-sm font-semibold">Data in Unnamed Columns</p>
+                                       <p className="text-xs text-slate-500">
+                                         Found {report.structural_issues.unnamed_column_data.length} instances of data in columns with no header labels.
+                                       </p>
+                                     </div>
+                                   </div>
+                                 )}
                                </div>
 
                                <div className="max-h-[600px] overflow-auto border border-[#141414]">

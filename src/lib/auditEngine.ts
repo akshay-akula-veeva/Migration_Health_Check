@@ -17,6 +17,8 @@ export async function auditFile(
     },
     structural_issues: {
       delimiter_mismatches: [],
+      empty_headers: [],
+      unnamed_column_data: [],
     },
     hidden_characters: {
       total_cells_flagged: 0,
@@ -44,10 +46,10 @@ export async function auditFile(
       whitespace_issues: {},
       excel_mutations: {},
       violation_details: [],
+      flagged_rows: [],
     },
   };
 
-  const badRows: any[][] = [];
   const globalUniqueGhosts = new Set<string>();
   const columnUniqueGhosts: Record<string, Set<string>> = {};
   const uniquenessTrackers: Record<string, Set<string>> = {};
@@ -68,7 +70,7 @@ export async function auditFile(
       delimiter: config.expectedDelimiter || ",",
       skipEmptyLines: 'greedy',
       header: false,
-      worker: true,
+      worker: false, // Disabled worker to ensure main-thread closure access for flagged_rows
       encoding: "UTF-8",
       step: (results) => {
         const row = results.data as string[];
@@ -77,7 +79,12 @@ export async function auditFile(
 
         if (currentLine === 1) {
           headersList = row;
-          headersList.forEach(h => headersSet.add(h));
+          headersList.forEach((h, idx) => {
+            if (h.trim() === "") {
+              report.structural_issues.empty_headers.push(idx.toString());
+            }
+            headersSet.add(h);
+          });
           report.file_health.column_count = headersList.length;
           report.file_health.headers = headersList;
           
@@ -91,23 +98,32 @@ export async function auditFile(
         }
 
         const expectedCount = report.file_health.column_count;
+        let rowIsFlagged = false;
+
         if (row.length !== expectedCount) {
           report.structural_issues.delimiter_mismatches.push({
             row: currentLine,
             found_cols: row.length,
             expected: expectedCount,
           });
-          badRows.push([currentLine, ...row]);
+          rowIsFlagged = true;
         }
 
         // Cell-by-cell scan
         row.forEach((cellValue, colIndex) => {
-          const colName = headersList[colIndex] || `Unknown_Col_${colIndex}`;
+          const isUnnamed = headersList[colIndex] === undefined || headersList[colIndex].trim() === "";
+          const colName = isUnnamed ? `Col_${colIndex + 1}_(Unnamed)` : headersList[colIndex];
           const stripped = cellValue.trim();
+
+          if (isUnnamed && stripped !== "") {
+            report.structural_issues.unnamed_column_data.push({ row: currentLine, col: colIndex });
+            rowIsFlagged = true;
+          }
           
           // Hidden Character Check
           const ghostMatches = cellValue.match(GHOST_CHAR_PATTERN);
           if (ghostMatches) {
+            rowIsFlagged = true;
             const ghostCodes = ghostMatches.map(char => `U+${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`);
             ghostCodes.forEach(code => globalUniqueGhosts.add(code));
             
@@ -124,6 +140,7 @@ export async function auditFile(
 
           // 1. Null Violations
           if (config.criticalFields.includes(colName) && stripped === "") {
+            rowIsFlagged = true;
             report.data_profiling.null_violations[colName] = (report.data_profiling.null_violations[colName] || 0) + 1;
             addViolation(report, currentLine, colName, cellValue, "Critical field is empty");
           }
@@ -132,6 +149,7 @@ export async function auditFile(
           if (config.uniqueFields.includes(colName) && stripped !== "") {
             if (!uniquenessTrackers[colName]) uniquenessTrackers[colName] = new Set();
             if (uniquenessTrackers[colName].has(stripped)) {
+              rowIsFlagged = true;
               report.data_profiling.uniqueness_violations[colName] = (report.data_profiling.uniqueness_violations[colName] || 0) + 1;
               addViolation(report, currentLine, colName, cellValue, "Value is not unique");
             } else {
@@ -142,6 +160,7 @@ export async function auditFile(
           // 3. Email Validation
           if (config.emailFields.includes(colName) && stripped !== "") {
             if (!EMAIL_REGEX.test(stripped)) {
+              rowIsFlagged = true;
               report.data_profiling.email_violations[colName] = (report.data_profiling.email_violations[colName] || 0) + 1;
               addViolation(report, currentLine, colName, cellValue, "Invalid email format");
             }
@@ -163,6 +182,7 @@ export async function auditFile(
             }
 
             if (!isValid) {
+              rowIsFlagged = true;
               report.data_profiling.date_violations[colName] = (report.data_profiling.date_violations[colName] || 0) + 1;
               addViolation(report, currentLine, colName, cellValue, `Invalid date format (Expected: ${dateConfig.format})`);
             }
@@ -174,6 +194,7 @@ export async function auditFile(
             try {
               const re = new RegExp(regexConfig.pattern);
               if (!re.test(stripped)) {
+                rowIsFlagged = true;
                 report.data_profiling.regex_violations[colName] = (report.data_profiling.regex_violations[colName] || 0) + 1;
                 addViolation(report, currentLine, colName, cellValue, regexConfig.description || `Failed pattern match: ${regexConfig.pattern}`);
               }
@@ -195,6 +216,7 @@ export async function auditFile(
           if (config.maxLengths[colName] !== undefined) {
             const maxAllowed = config.maxLengths[colName];
             if (cellValue.length > maxAllowed) {
+              rowIsFlagged = true;
               report.data_profiling.length_violations.total_violations++;
               if (!report.data_profiling.length_violations.column_details[colName]) {
                 report.data_profiling.length_violations.column_details[colName] = {
@@ -225,6 +247,14 @@ export async function auditFile(
           }
         });
 
+        // Collect flagged rows for export
+        if (rowIsFlagged) {
+          // Add to flagged rows for CSV export (Limit to 5000 for memory)
+          if (report.data_profiling.flagged_rows.length < 5000) {
+            report.data_profiling.flagged_rows.push([currentLine, ...row]);
+          }
+        }
+
         if (currentLine % 1000 === 0) {
           onProgress(currentLine);
         }
@@ -234,7 +264,7 @@ export async function auditFile(
         Object.entries(columnUniqueGhosts).forEach(([col, ghosts]) => {
           report.hidden_characters.summary_unique_ghost_codes_per_column[col] = Array.from(ghosts);
         });
-        resolve({ report, badRows });
+        resolve({ report, badRows: report.data_profiling.flagged_rows });
       },
       error: (error) => {
         reject(error);

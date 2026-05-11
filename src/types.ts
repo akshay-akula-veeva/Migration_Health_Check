@@ -45,6 +45,8 @@ export interface AuditReport {
   };
   structural_issues: {
     delimiter_mismatches: StructuralIssue[];
+    empty_headers: string[]; // List of column indices (as strings or numbers) that are empty
+    unnamed_column_data: { row: number; col: number }[]; // Rows where data exists in columns with no header
   };
   hidden_characters: {
     total_cells_flagged: number;
@@ -72,6 +74,7 @@ export interface AuditReport {
     whitespace_issues: Record<string, number>;
     excel_mutations: Record<string, number>;
     violation_details: ValidationViolation[]; // For first N violations of complex rules
+    flagged_rows: any[][]; // New field for row exports
   };
 }
 
